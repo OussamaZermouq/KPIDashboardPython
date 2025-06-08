@@ -12,6 +12,7 @@ logging.basicConfig(level=logging.INFO)
 app = FastAPI()
 origins = ["http://localhost:3000"]
 
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=origins,
@@ -29,11 +30,11 @@ async def upload_file(
     sheet_name: str = "Hourly Ville",
     Authorization: Annotated[str | None, Header()] = None,
     city: str = "",
-):
+    date: str=""
+    ):
     if not Authorization:
         raise HTTPException(status_code=403, detail="Missing authorization token")
 
-    # Checking if the file is an Excel sheet
     if not file.filename.endswith(".xlsx"):
         raise HTTPException(status_code=400, detail="File must be an Excel sheet")
 
@@ -45,7 +46,6 @@ async def upload_file(
         xl = pd.ExcelFile(io.BytesIO(content), engine="openpyxl")
         logging.info(f"Sheet Names: {xl.sheet_names}")
 
-        # Validate sheet name
         if sheet_name not in xl.sheet_names:
             raise HTTPException(
                 status_code=400,
@@ -58,20 +58,19 @@ async def upload_file(
             sheet_name=sheet_name,
             header=1,
             index_col=0,
+            
         )
-        logging.info(f"Data Preview:\n{data.head()}")
-
-        # Fill NaN and replace infinite values
+        
         data = data.fillna("").replace([float("inf"), float("-inf")], 0)
-
-        return {"data": data.to_dict(orient="records")}
+        result = data[(data['City'] == city) & (data['Date'] == date)].to_dict(orient="records")
+        return {"data": result}
 
     except Exception as e:
         logging.error(f"Error processing file: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Internal Server Error: {str(e)}")
 
 
-# Returns the sheets names and the cities in an excel file and
+#Returns the sheets names, cities and dates in an excel file
 @app.post("/info")
 async def getFileInfo(
     Authorization: Annotated[str | None, Header()] = None, file: UploadFile = File(...)
@@ -80,7 +79,6 @@ async def getFileInfo(
     if not Authorization:
         raise HTTPException(status_code=403, detail="Missing authorization token")
 
-    # Checking if the file is an Excel sheet
     if not file.filename.endswith(".xlsx"):
         raise HTTPException(status_code=400, detail="File must be an Excel sheet")
 
@@ -102,9 +100,13 @@ async def getFileInfo(
             index_col=0
         )
         
-        cities = df['City'].values.tolist()
-        uniqueCities = list(dict.fromkeys(cities))
-        return {"sheets": xl.sheet_names, "cities": uniqueCities}
+        uniqueCities = pd.unique(df['City'])
+        uniqueDates =  pd.unique(df['Date'].dt.strftime('%Y-%m-%d'))
+        
+        cities = list(dict.fromkeys(uniqueCities))
+        dates = list(dict.fromkeys(uniqueDates))
+
+        return {"sheets": xl.sheet_names, "cities": cities, "dates": dates}
 
     except Exception as e:
         logging.error("Error processing file")
