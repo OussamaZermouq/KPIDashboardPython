@@ -22,7 +22,7 @@ app.add_middleware(
 )
 
 AUTH_SERVER_URL = "http://localhost:8005/api/v1/auth"
-
+FILE_CONTROLLER_URL = "http://localhost:8005/api/v1/file"
 
 @app.post("/upload")
 async def upload_file(
