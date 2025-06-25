@@ -4,8 +4,11 @@ import io
 import logging
 from typing import Annotated, Any
 from app.dependencies.auth import validate_token
-
+import json
+import httpx
 router = APIRouter()
+BASE_URL_SPRING = "http://localhost:8005/api/v1/file"
+
 
 @router.post("/upload")
 async def upload_file(
@@ -13,7 +16,7 @@ async def upload_file(
     sheet_name: str = "Hourly Ville",
     Authorization: Annotated[str | None, Header()] = None,
     city: str = "",
-    date: str = ""
+    date: str = "",
 ):
     if not Authorization:
         raise HTTPException(status_code=403, detail="Missing authorization token")
@@ -44,16 +47,17 @@ async def upload_file(
             index_col=0,
         )
         data = data.fillna("").replace([float("inf"), float("-inf")], 0)
-        result = data[(data['City'] == city) & (data['Date'] == date)].to_dict(orient="records")
+        result = data[(data["City"] == city) & (data["Date"] == date)].to_dict(
+            orient="records"
+        )
         return {"data": result}
 
     except Exception as e:
         logging.error(f"Error processing file: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Internal Server Error: {str(e)}")
-    
 
 
-#Returns the sheets names, cities and dates in an excel file
+# Returns the sheets names, cities and dates in an excel file
 @router.post("/info")
 async def getFileInfo(
     Authorization: Annotated[str | None, Header()] = None, file: UploadFile = File(...)
@@ -71,21 +75,15 @@ async def getFileInfo(
 
     try:
         content = await file.read()
-        xl = pd.ExcelFile(
-            io.BytesIO(content),
-            engine='openpyxl'
-        )
-        
+        xl = pd.ExcelFile(io.BytesIO(content), engine="openpyxl")
+
         df = pd.read_excel(
-            io.BytesIO(content), 
-            engine="openpyxl", 
-            header=1, 
-            index_col=0
+            io.BytesIO(content), engine="openpyxl", header=1, index_col=0
         )
-        
-        uniqueCities = pd.unique(df['City'])
-        uniqueDates =  pd.unique(df['Date'].dt.strftime('%Y-%m-%d'))
-        
+
+        uniqueCities = pd.unique(df["City"])
+        uniqueDates = pd.unique(df["Date"].dt.strftime("%Y-%m-%d"))
+
         cities = list(dict.fromkeys(uniqueCities))
         dates = list(dict.fromkeys(uniqueDates))
 
@@ -95,6 +93,61 @@ async def getFileInfo(
         logging.error("Error processing file")
         raise HTTPException(status_code=500, detail=f"Internal Server Error: {str(e)}")
 
+@router.post("/uploadForCloud")
+async def uploadFileToCloud(
+    file: UploadFile = File(...), Authorization: Annotated[str | None, Header()] = None
+):
+    if not Authorization:
+        raise HTTPException(status_code=403, detail="Missing authorization token")
+
+    if not file.filename.endswith(".xlsx"):
+        raise HTTPException(status_code=400, detail="File must be an Excel sheet")
+
+    response = await validate_token(Authorization)
+    if response["code"] != 200:
+        raise HTTPException(status_code=401, detail="Token is invalid or Expired")
+
+    try:
+        content = await file.read()
+        df = pd.read_excel(io.BytesIO(content), engine="openpyxl", header=1, index_col=0)
+        uniqueDates = pd.unique(df["Date"].dt.strftime("%Y-%m-%d"))
+
+       
+        filePayload = [
+            (
+                "file",
+                (
+                    file.filename,
+                    io.BytesIO(content),
+                    file.content_type,
+                ),
+            ),
+            (
+                "fileInfo",
+                (
+                    None,
+                    json.dumps({
+                        "startDate": uniqueDates[0],
+                        "endDate": uniqueDates[-1],
+                    }),
+                    "application/json",
+                ),
+            ),
+        ]
+        headers = {"Authorization": Authorization}
+
+        async with httpx.AsyncClient() as client:
+            response = await client.post(
+                BASE_URL_SPRING + "/upload",
+                headers=headers,
+                files=filePayload,
+            )
+
+        return {"data": response.text}
+
+    except Exception as e:
+        logging.error("Error processing file")
+        raise HTTPException(status_code=500, detail=f"Internal Server Error: {str(e)}")
 
 @router.post("/getsynthese")
 async def getsynthese(
@@ -180,5 +233,3 @@ async def getsynthese(
     nbr_wcl_volte_latency = 0
 
     return {"code": 200, "data": kpiData}
-
-
